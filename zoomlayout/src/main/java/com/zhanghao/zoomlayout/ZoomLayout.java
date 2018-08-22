@@ -32,7 +32,7 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     private static final float MAX_FLING_DISTANCE = 100;
     private static final int PER_SECONDS = 1000;
     private static final int INVALID_POINTER = -1;
-    private static final int SCROLL_EDGE_LENGTH_DP = 200;
+    private static final int SCROLL_EDGE_LENGTH_DP = 100;
     private static final int VERTICAL = 1 << 1;
     private static final int HORIZONTAL = 1 << 2;
     private float mScaleFactor = 1;
@@ -157,6 +157,7 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
         mScrollBound.right = mScrollBound.right + mScrollEdgeLength;
         mScrollBound.bottom = mScrollBound.bottom + mScrollEdgeLength;
         Log.d(TAG, "expandScrollBoundIfNeeded: "+mScrollBound.toString());
+        Log.d(TAG, "expandScrollBoundIfNeeded: "+(child().getY() - mScrollBound.top));
     }
 
     @Override
@@ -237,7 +238,7 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
                 float velocityY = mVelocityTracker.getYVelocity();
                 Log.d(TAG, "onTouchEvent: velocityX " + velocityX);
                 Log.d(TAG, "onTouchEvent: velocityY " + velocityY);
-                performChildFlingAnimationIfNeeded(velocityX, velocityY);
+//                performChildFlingAnimationIfNeeded(velocityX, velocityY);
                 mIsScaling = false;
                 mIsScrolling = false;
             }
@@ -268,20 +269,23 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     }
 
     private float calculateTranslation(View child, float originTranslation, float deltaTranslation, int direction) {
+        float currentTop = child.getY();
+        float currentBottom = currentTop + child.getMeasuredHeight();
+        float currentLeft = child.getX();
+        float currentRight = currentLeft + child.getMeasuredWidth();
         float currentTranslation = originTranslation + deltaTranslation;
         switch (direction) {
             case VERTICAL: {
                 if (deltaTranslation < 0) {
                     // scroll up
-                    float maxScrollUp = mScrollBound.top;
-                    if (currentTranslation < maxScrollUp) {
-                        currentTranslation = maxScrollUp;
+                    if (currentTop < mScrollBound.top) {
+                        float x = mScrollBound.top - child.getTop();
+                        return mScrollBound.top - child.getTop();
                     }
                 } else {
                     // scroll down
-                    float maxScrollDown = mScrollBound.bottom - child.getMeasuredHeight();
-                    if (currentTranslation > maxScrollDown) {
-                        currentTranslation = maxScrollDown;
+                    if (currentBottom > mScrollBound.bottom) {
+                        return mScrollBound.bottom - child.getBottom();
                     }
                 }
                 break;
@@ -289,15 +293,13 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
             case HORIZONTAL: {
                 if (deltaTranslation < 0) {
                     //scroll left
-                    float maxScrollLeft = mScrollBound.left;
-                    if (currentTranslation < maxScrollLeft) {
-                        currentTranslation = maxScrollLeft;
+                    if (currentLeft < mScrollBound.left) {
+                        return mScrollBound.left - child.getLeft();
                     }
                 } else {
                     //scroll right
-                    float maxScrollRight = mScrollBound.right - child.getMeasuredWidth();
-                    if (currentTranslation > maxScrollRight) {
-                        currentTranslation = maxScrollRight;
+                    if (currentRight > mScrollBound.right) {
+                        return mScrollBound.right - child.getRight();
                     }
                 }
                 break;
@@ -311,8 +313,11 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
             View child = child();
             float originTransX = child.getTranslationX();
             float originTransY = child.getTranslationY();
+            Log.d(TAG, "performChildFlingAnimationIfNeeded: "+originTransX);
+            Log.d(TAG, "performChildFlingAnimationIfNeeded: "+originTransY);
             float dx = velocityX / PER_SECONDS * FLING_ANIM_DURATION;
             float dy = velocityY / PER_SECONDS * FLING_ANIM_DURATION;
+            // TODO: 2018/8/22  x y 改进
             initChildFlingHorizontalAnimation(child, originTransX, dx);
             initChildFlingVerticalAnimation(child, originTransY, dy);
             AnimatorSet animatorTransXY = new AnimatorSet();
