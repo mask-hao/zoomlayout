@@ -21,7 +21,6 @@ import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.Scroller;
 
-
 public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnScaleGestureListener {
     private static final String TAG = "ZoomLayout";
     private static final float MIN_SCALE_FACTOR = 0.5f;
@@ -35,6 +34,7 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     private static final int SCROLL_EDGE_LENGTH_DP = 100;
     private static final int VERTICAL = 1 << 1;
     private static final int HORIZONTAL = 1 << 2;
+    private static final float VELOCITY_PERCENT = 0.3f;
     private float mScaleFactor = 1;
     private int mScaleTouchSlop;
     private VelocityTracker mVelocityTracker;
@@ -54,6 +54,11 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     private RectF mScrollBound;
     private int mScrollEdgeLength;
     private Scroller mScroller;
+
+    private float mMaxScrollUp;
+    private float mMaxScrollDown;
+    private float mMaxScrollLeft;
+    private float mMaxScrollRight;
 
     public ZoomLayout(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -132,6 +137,15 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
         setChildBound(childMeasureWidth, childMeasureHeight);
         setScrollBound(width, height);
         expandScrollBoundIfNeeded();
+        initialMaxScrollParams();
+    }
+
+    private void initialMaxScrollParams() {
+        View child = child();
+        mMaxScrollUp = mScrollBound.top - child.getTop();
+        mMaxScrollDown = mScrollBound.bottom - child.getBottom();
+        mMaxScrollLeft = mScrollBound.left - child.getLeft();
+        mMaxScrollRight = mScrollBound.right - child.getRight();
     }
 
     private void setChildBound(int childWidth, int childHeight) {
@@ -156,8 +170,7 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
         mScrollBound.top = mScrollBound.top - mScrollEdgeLength;
         mScrollBound.right = mScrollBound.right + mScrollEdgeLength;
         mScrollBound.bottom = mScrollBound.bottom + mScrollEdgeLength;
-        Log.d(TAG, "expandScrollBoundIfNeeded: "+mScrollBound.toString());
-        Log.d(TAG, "expandScrollBoundIfNeeded: "+(child().getY() - mScrollBound.top));
+        Log.d(TAG, "expandScrollBoundIfNeeded: " + mScrollBound.toString());
     }
 
     @Override
@@ -238,7 +251,7 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
                 float velocityY = mVelocityTracker.getYVelocity();
                 Log.d(TAG, "onTouchEvent: velocityX " + velocityX);
                 Log.d(TAG, "onTouchEvent: velocityY " + velocityY);
-//                performChildFlingAnimationIfNeeded(velocityX, velocityY);
+                performChildFlingAnimationIfNeeded(velocityX, velocityY);
                 mIsScaling = false;
                 mIsScrolling = false;
             }
@@ -273,19 +286,20 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
         float currentBottom = currentTop + child.getMeasuredHeight();
         float currentLeft = child.getX();
         float currentRight = currentLeft + child.getMeasuredWidth();
+
         float currentTranslation = originTranslation + deltaTranslation;
+
         switch (direction) {
             case VERTICAL: {
                 if (deltaTranslation < 0) {
                     // scroll up
                     if (currentTop < mScrollBound.top) {
-                        float x = mScrollBound.top - child.getTop();
-                        return mScrollBound.top - child.getTop();
+                        return mMaxScrollUp;
                     }
                 } else {
                     // scroll down
                     if (currentBottom > mScrollBound.bottom) {
-                        return mScrollBound.bottom - child.getBottom();
+                        return mMaxScrollDown;
                     }
                 }
                 break;
@@ -294,12 +308,12 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
                 if (deltaTranslation < 0) {
                     //scroll left
                     if (currentLeft < mScrollBound.left) {
-                        return mScrollBound.left - child.getLeft();
+                        return mMaxScrollLeft;
                     }
                 } else {
                     //scroll right
                     if (currentRight > mScrollBound.right) {
-                        return mScrollBound.right - child.getRight();
+                        return mMaxScrollRight;
                     }
                 }
                 break;
@@ -313,13 +327,11 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
             View child = child();
             float originTransX = child.getTranslationX();
             float originTransY = child.getTranslationY();
-            Log.d(TAG, "performChildFlingAnimationIfNeeded: "+originTransX);
-            Log.d(TAG, "performChildFlingAnimationIfNeeded: "+originTransY);
             float dx = velocityX / PER_SECONDS * FLING_ANIM_DURATION;
             float dy = velocityY / PER_SECONDS * FLING_ANIM_DURATION;
-            // TODO: 2018/8/22  x y 改进
-            initChildFlingHorizontalAnimation(child, originTransX, dx);
-            initChildFlingVerticalAnimation(child, originTransY, dy);
+
+            initFlingAnimationIfNeeded(child, originTransX, originTransY, dx, dy);
+
             AnimatorSet animatorTransXY = new AnimatorSet();
             animatorTransXY.setDuration(FLING_ANIM_DURATION);
             if (mAnimTranX != null && mAnimTranY != null) {
@@ -334,11 +346,41 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
 
     }
 
+    private void initFlingAnimationIfNeeded(View child, float originTransX, float originTransY, float dx, float dy) {
+        float absX = Math.abs(dx);
+        float absY = Math.abs(dy);
+        if (absY > absX) {
+            // vertical
+            float percent = absX / absY;
+            if (percent >= VELOCITY_PERCENT) {
+                //init all
+                initChildFlingVerticalAnimation(child, originTransY, dy);
+                initChildFlingHorizontalAnimation(child, originTransX, dx);
+            } else {
+                // just vertical
+                initChildFlingVerticalAnimation(child, originTransY, dy);
+            }
+        } else {
+            // horizontal
+            float percent = absY / absX;
+            if (percent >= VELOCITY_PERCENT) {
+                //init all
+                initChildFlingVerticalAnimation(child, originTransY, dy);
+                initChildFlingHorizontalAnimation(child, originTransX, dx);
+            } else {
+                // just horizontal
+                initChildFlingHorizontalAnimation(child, originTransX, dx);
+            }
+        }
+
+    }
+
     private void initChildFlingHorizontalAnimation(final View child, final float originTransX, float dx) {
-        final float currentTransX = calculateTranslation(child, originTransX, dx, HORIZONTAL);
-        if (originTransX == currentTransX) {
-            mAnimTranX = null;
-            return;
+        float currentTransX = originTransX + dx;
+        if (currentTransX < mMaxScrollLeft) {
+            currentTransX = mMaxScrollLeft;
+        } else if (currentTransX > mMaxScrollRight) {
+            currentTransX = mMaxScrollRight;
         }
         final float diffX = currentTransX - originTransX;
         mAnimTranX = ValueAnimator.ofFloat(originTransX, currentTransX)
@@ -356,10 +398,11 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     }
 
     private void initChildFlingVerticalAnimation(final View child, final float originTransY, float dy) {
-        final float currentTransY = calculateTranslation(child, originTransY, dy, VERTICAL);
-        if (originTransY == currentTransY) {
-            mAnimTranY = null;
-            return;
+        float currentTransY = originTransY + dy;
+        if (currentTransY <= mMaxScrollUp) {
+            currentTransY = mMaxScrollUp;
+        } else if (currentTransY > mMaxScrollDown) {
+            currentTransY = mMaxScrollDown;
         }
         final float diffY = currentTransY - originTransY;
         mAnimTranY = ValueAnimator.ofFloat(originTransY, currentTransY)
