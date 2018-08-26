@@ -6,7 +6,11 @@ import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.RectF;
+import android.os.Parcel;
+import android.os.Parcelable;
+import android.support.annotation.Nullable;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.GestureDetector;
@@ -18,8 +22,8 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
+import android.widget.EdgeEffect;
 import android.widget.FrameLayout;
-import android.widget.Scroller;
 
 public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnScaleGestureListener {
     private static final String TAG = "ZoomLayout";
@@ -34,13 +38,15 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     private static final int SCROLL_EDGE_LENGTH_DP = 100;
     private static final int VERTICAL = 1 << 1;
     private static final int HORIZONTAL = 1 << 2;
-    private static final float VELOCITY_PERCENT = 0.3f;
+    private static final float VELOCITY_PERCENT = 0.2f;
+    private static final float MIN_FLING_VELOCITY = 10f;
     private float mScaleFactor = 1;
     private int mScaleTouchSlop;
     private VelocityTracker mVelocityTracker;
     private int mMaxFlingVelocity;
-    private int mMinFlingVelocity;
     private int mTouchSlop;
+    private float mLastDownX;
+    private float mLastDownY;
     private float mDownX;
     private float mDownY;
     private boolean mIsScrolling = false;
@@ -53,12 +59,11 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     private RectF mChildBound;
     private RectF mScrollBound;
     private int mScrollEdgeLength;
-    private Scroller mScroller;
-
     private float mMaxScrollUp;
     private float mMaxScrollDown;
     private float mMaxScrollLeft;
     private float mMaxScrollRight;
+
 
     public ZoomLayout(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -78,13 +83,10 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
         mGestureDetector = new GestureDetector(context, mSimpleOnGestureListener);
         mVelocityTracker = VelocityTracker.obtain();
         mMaxFlingVelocity = vc.getScaledMaximumFlingVelocity();
-        mMinFlingVelocity = vc.getScaledMinimumFlingVelocity();
         mChildBound = new RectF();
         mScrollBound = new RectF();
         mScrollEdgeLength = DensityUtil.dp2px(context, SCROLL_EDGE_LENGTH_DP);
-        mScroller = new Scroller(context);
         Log.d(TAG, "init: mMaxFlingVelocity " + mMaxFlingVelocity);
-        Log.d(TAG, "init: mMinFlingVelocity" + mMinFlingVelocity);
     }
 
     private void checkDirectChildCount() {
@@ -180,16 +182,15 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
             case MotionEvent.ACTION_DOWN: {
                 float x = ev.getX();
                 float y = ev.getY();
-                mDownX = x;
-                mDownY = y;
+                mLastDownX = x;
+                mLastDownY = y;
                 break;
             }
             case MotionEvent.ACTION_MOVE: {
                 float x = ev.getX();
                 float y = ev.getY();
-                mIsScrolling = interceptScrollEventIfNeeded(x, y);
-                mIsScaling = interceptScaleEventIfNeeded(ev);
-                return mIsScrolling || mIsScaling;
+                return interceptScrollEventIfNeeded(x, y)
+                        || interceptScaleEventIfNeeded(ev);
             }
         }
         return false;
@@ -201,8 +202,8 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     }
 
     private boolean interceptScrollEventIfNeeded(float moveX, float moveY) {
-        float deltaX = moveX - mDownX;
-        float deltaY = moveY - mDownY;
+        float deltaX = moveX - mLastDownX;
+        float deltaY = moveY - mLastDownY;
         return Math.abs(deltaX) > mTouchSlop || Math.abs(deltaY) > mTouchSlop;
     }
 
@@ -233,27 +234,40 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
                 float y = event.getY();
                 mDownX = x;
                 mDownY = y;
+                mLastDownX = x;
+                mLastDownY = y;
                 break;
             }
             case MotionEvent.ACTION_MOVE: {
                 float x = event.getX();
                 float y = event.getY();
-                float dx = x - mDownX;
-                float dy = y - mDownY;
+                float dx = x - mLastDownX;
+                float dy = y - mLastDownY;
                 performChildTranslationIfNeeded(dx, dy);
-                mDownX = x;
-                mDownY = y;
+                mLastDownX = x;
+                mLastDownY = y;
                 break;
             }
             case MotionEvent.ACTION_UP: {
+                if (mIsScaling) {
+                    mIsScaling = false;
+                    break;
+                }
                 mVelocityTracker.computeCurrentVelocity(PER_SECONDS, mMaxFlingVelocity);
                 float velocityX = mVelocityTracker.getXVelocity();
                 float velocityY = mVelocityTracker.getYVelocity();
+                float tempVx = Math.abs(velocityX), tempVy = Math.abs(velocityY);
+                if (tempVx < MIN_FLING_VELOCITY && tempVy < MIN_FLING_VELOCITY) {
+                    break;
+                }
+                tempVx = tempVx > mMaxFlingVelocity ? mMaxFlingVelocity : tempVx;
+                tempVy = tempVy > mMaxFlingVelocity ? mMaxFlingVelocity : tempVy;
+                velocityX = velocityX < 0 ? -tempVx : tempVx;
+                velocityY = velocityY < 0 ? -tempVy : tempVy;
                 Log.d(TAG, "onTouchEvent: velocityX " + velocityX);
                 Log.d(TAG, "onTouchEvent: velocityY " + velocityY);
+                clearAllAnimationsIfNeeded();
                 performChildFlingAnimationIfNeeded(velocityX, velocityY);
-                mIsScaling = false;
-                mIsScrolling = false;
             }
         }
         mGestureDetector.onTouchEvent(event);
@@ -261,16 +275,25 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
     }
 
     private void clearAllAnimationsIfNeeded() {
-        if (mAnimTranX != null && mAnimTranX.isRunning()) {
-            mAnimTranX.cancel();
+        if (mAnimTranX != null) {
+            if (mAnimTranX.isStarted() || mAnimTranX.isRunning()) {
+                mAnimTranX.cancel();
+            }
+            mAnimTranX = null;
         }
-        if (mAnimTranY != null && mAnimTranY.isRunning()) {
-            mAnimTranY.cancel();
+        if (mAnimTranY != null) {
+            if (mAnimTranY.isStarted() || mAnimTranY.isRunning()) {
+                mAnimTranY.cancel();
+            }
+            mAnimTranX = null;
         }
     }
 
     private void performChildTranslationIfNeeded(float dx, float dy) {
         if (!mIsScaling && !mIsFlinging) {
+            if (Math.abs(dx) < mTouchSlop && Math.abs(dy) < mTouchSlop) {
+                return;
+            }
             View child = child();
             float originTx = child.getTranslationX();
             float originTy = child.getTranslationY();
@@ -335,40 +358,50 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
             AnimatorSet animatorTransXY = new AnimatorSet();
             animatorTransXY.setDuration(FLING_ANIM_DURATION);
             if (mAnimTranX != null && mAnimTranY != null) {
-                animatorTransXY.playTogether(mAnimTranX, mAnimTranY);
+                launch(animatorTransXY, mAnimTranX, mAnimTranY);
             } else if (mAnimTranX != null) {
-                animatorTransXY.playTogether(mAnimTranX);
+                launch(animatorTransXY, mAnimTranX);
             } else if (mAnimTranY != null) {
-                animatorTransXY.playTogether(mAnimTranY);
+                launch(animatorTransXY, mAnimTranY);
             }
-            animatorTransXY.start();
         }
 
     }
 
+    private void launch(AnimatorSet set, Animator... animators) {
+        set.playTogether(animators);
+        set.start();
+    }
+
     private void initFlingAnimationIfNeeded(View child, float originTransX, float originTransY, float dx, float dy) {
-        float absX = Math.abs(dx);
-        float absY = Math.abs(dy);
-        if (absY > absX) {
+        float flingX = Math.abs(mLastDownX - mDownX);
+        float flingY = Math.abs(mLastDownY - mDownY);
+        if (flingX < mTouchSlop && flingY < mTouchSlop) {
+            return;
+        }
+        if (flingY > flingX) {
             // vertical
-            float percent = absX / absY;
+            float percent = flingX / flingY;
+            Log.d(TAG, "initFlingAnimationIfNeeded: percent: " + percent);
             if (percent >= VELOCITY_PERCENT) {
                 //init all
                 initChildFlingVerticalAnimation(child, originTransY, dy);
                 initChildFlingHorizontalAnimation(child, originTransX, dx);
             } else {
                 // just vertical
+                mAnimTranX = null;
                 initChildFlingVerticalAnimation(child, originTransY, dy);
             }
         } else {
             // horizontal
-            float percent = absY / absX;
+            float percent = flingY / flingX;
             if (percent >= VELOCITY_PERCENT) {
                 //init all
                 initChildFlingVerticalAnimation(child, originTransY, dy);
                 initChildFlingHorizontalAnimation(child, originTransX, dx);
             } else {
                 // just horizontal
+                mAnimTranY = null;
                 initChildFlingHorizontalAnimation(child, originTransX, dx);
             }
         }
@@ -419,56 +452,6 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
         mAnimTranY.addListener(mFlingAnimatorListener);
     }
 
-    private void performChildFlingHorizontalAnimationIfNeeded(float velocityX) {
-        if (!mIsScaling) {
-            final View child = child();
-            final float originTransX = child.getTranslationX();
-            final float dx = velocityX / PER_SECONDS * FLING_ANIM_DURATION;
-            final float currentTransX = calculateTranslation(child, originTransX, dx, HORIZONTAL);
-            if (originTransX == currentTransX) {
-                return;
-            }
-            final float diffX = currentTransX - originTransX;
-            mAnimTranX = ValueAnimator.ofFloat(originTransX, currentTransX)
-                    .setDuration(FLING_ANIM_DURATION);
-            mAnimTranX.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override
-                public void onAnimationUpdate(ValueAnimator animation) {
-                    float fraction = animation.getAnimatedFraction();
-                    float animateX = fraction * diffX;
-                    child.setTranslationX(originTransX + animateX);
-                }
-            });
-            mAnimTranX.addListener(mFlingAnimatorListener);
-            mAnimTranX.start();
-        }
-    }
-
-    private void performChildFlingVerticalAnimationIfNeeded(float velocityY) {
-        if (!mIsScaling) {
-            final View child = child();
-            final float originTransY = child.getTranslationY();
-            final float dy = velocityY / PER_SECONDS * FLING_ANIM_DURATION;
-            final float currentTransY = calculateTranslation(child, originTransY, dy, VERTICAL);
-            if (originTransY == currentTransY) {
-                return;
-            }
-            final float diffY = currentTransY - originTransY;
-            mAnimTranY = ValueAnimator.ofFloat(originTransY, currentTransY)
-                    .setDuration(FLING_ANIM_DURATION);
-            mAnimTranY.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override
-                public void onAnimationUpdate(ValueAnimator animation) {
-                    float fraction = animation.getAnimatedFraction();
-                    float animateY = fraction * diffY;
-                    child.setTranslationY(originTransY + animateY);
-                }
-            });
-            mAnimTranY.addListener(mFlingAnimatorListener);
-            mAnimTranY.start();
-        }
-    }
-
     private void performChildScaleIfNeeded() {
         View child = child();
         if (checkScaleFactor(child.getScaleX(), child.getScaleY())) {
@@ -512,7 +495,6 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
 
     @Override
     public void onScaleEnd(ScaleGestureDetector detector) {
-        mIsScaling = false;
     }
 
     @Override
@@ -537,36 +519,7 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
             performChildScaleWithAnimationIfNeeded();
             return true;
         }
-
-//        @Override
-//        public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
-//            scrollBy((int) distanceX, (int) distanceY);
-//            return super.onScroll(e1, e2, distanceX, distanceY);
-//
-//        }
-
-//        @Override
-//        public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-//            int x = mScroller.getCurrX();
-//            int y = mScroller.getCurrY();
-//            int vX = (int) -velocityX;
-//            int vY = (int) -velocityY;
-//            int minX = (int) mScrollBound.left;
-//            int maxX = (int) mScrollBound.right;
-//            int minY = (int) mScrollBound.top;
-//            int maxY = (int) mScrollBound.bottom;
-//            mScroller.fling(x, y, vX, vY, minX, maxX, minY, maxY);
-//            return super.onFling(e1, e2, velocityX, velocityY);
-//        }
     };
-
-//    @Override
-//    public void computeScroll() {
-//        if (mScroller.computeScrollOffset()) {
-//            scrollTo(mScroller.getCurrX(), mScroller.getCurrY());
-//            postInvalidate();
-//        }
-//    }
 
     private boolean checkScaleFactor(float originScaleFactorX, float originScaleFactorY) {
         boolean checkMaxFactor = (originScaleFactorX == MAX_SCALE_FACTOR && originScaleFactorY == MAX_SCALE_FACTOR
@@ -609,4 +562,75 @@ public class ZoomLayout extends FrameLayout implements ScaleGestureDetector.OnSc
             mVelocityTracker.recycle();
         }
     }
+
+    @Nullable
+    @Override
+    protected Parcelable onSaveInstanceState() {
+        View child = child();
+        Parcelable superState = super.onSaveInstanceState();
+        SavedState savedState = new SavedState(superState);
+        savedState.translationX = child.getTranslationX();
+        savedState.translationY = child.getTranslationY();
+        savedState.scaleFactor = child.getScaleX();
+        return savedState;
+    }
+
+    @Override
+    protected void onRestoreInstanceState(Parcelable state) {
+        SavedState savedState = (SavedState) state;
+        super.onRestoreInstanceState(savedState.getSuperState());
+        restoreViewState(savedState);
+    }
+
+    private void restoreViewState(SavedState state) {
+        View child = child();
+        float transX = state.translationX;
+        float transY = state.translationY;
+        float scale = state.scaleFactor;
+        child.setTranslationX(transX);
+        child.setTranslationY(transY);
+        child.setScaleX(scale);
+        child.setScaleY(scale);
+    }
+
+    private static class SavedState extends BaseSavedState {
+
+        private float translationX;
+        private float translationY;
+        private float scaleFactor;
+
+        SavedState(Parcelable superState) {
+            super(superState);
+        }
+
+        private SavedState(Parcel source) {
+            super(source);
+            translationX = source.readFloat();
+            translationY = source.readFloat();
+            scaleFactor = source.readFloat();
+        }
+
+        @Override
+        public void writeToParcel(Parcel out, int flags) {
+            super.writeToParcel(out, flags);
+            out.writeFloat(translationX);
+            out.writeFloat(translationY);
+            out.writeFloat(scaleFactor);
+        }
+
+        public static final Parcelable.Creator<SavedState> CREATOR =
+                new Parcelable.Creator<SavedState>() {
+                    @Override
+                    public SavedState createFromParcel(Parcel source) {
+                        return new SavedState(source);
+                    }
+
+                    @Override
+                    public SavedState[] newArray(int size) {
+                        return new SavedState[size];
+                    }
+                };
+
+    }
+
 }
